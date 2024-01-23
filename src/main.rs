@@ -39,7 +39,7 @@ fn handle_criterion_result(env: Environment, criterion: serde_json::Value) -> Be
     let (benchmark_name, commit) = benchmark_name.rsplit_once('_').unwrap();
     let (benchmark_name, branch) = benchmark_name.rsplit_once('_').unwrap();
 
-    let (source, time) = Source::from_remote_repo_with_time(
+    let (source, time) = Source::from_remote_repo_with_rev_fresh_clone(
         "http://github.com/meilisearch/meilisearch",
         branch,
         commit,
@@ -49,6 +49,11 @@ fn handle_criterion_result(env: Environment, criterion: serde_json::Value) -> Be
 
     let mut benchmark_data = BenchmarkData::new(env, source, benchmark_name, time);
     benchmark_data.with_project("Milli's benchmark");
+    benchmark_data.push_criterion(Criterion {
+        id: 0,
+        name: String::from("total"),
+        unit: String::from("ns"),
+    });
 
     for (sub_benchmark_name, benchmark) in criterion["benchmarks"].as_object().unwrap() {
         let bench = Benchmark {
@@ -68,8 +73,6 @@ fn handle_criterion_result(env: Environment, criterion: serde_json::Value) -> Be
             },
             desc: None,
         };
-
-        dbg!(benchmark);
 
         let run_id = RunId {
             benchmark: bench,
@@ -93,29 +96,26 @@ fn handle_criterion_result(env: Environment, criterion: serde_json::Value) -> Be
 
         let mut point = DataPoint::new(1, 10);
 
-        // We lost all the infos about the real points so we're instead going to simulate the standard deviation around the median
         let median = &benchmark["criterion_estimates_v1"]["median"];
         let point_estimate = median["point_estimate"].as_f64().unwrap();
         let std_error = median["standard_error"].as_f64().unwrap();
 
-        let simulate_n_points = 10;
-        for _ in -simulate_n_points..simulate_n_points {
-            point.add_point(Measure {
-                criterion_id: 0,
-                value: point_estimate + std_error / simulate_n_points as f64,
-            })
-        }
-
+        // We lost all the infos about the real points so we're instead going to simulate the standard deviation around the median by pushing three points
+        point.add_point(Measure {
+            criterion_id: 0,
+            value: point_estimate - std_error,
+        });
+        point.add_point(Measure {
+            criterion_id: 0,
+            value: point_estimate,
+        });
+        point.add_point(Measure {
+            criterion_id: 0,
+            value: point_estimate + std_error,
+        });
         run.add_data(point);
 
-        benchmark_data.register_run(
-            run,
-            Criterion {
-                id: 0,
-                name: String::from("total"),
-                unit: String::from("ms"),
-            },
-        );
+        benchmark_data.push_run(run);
     }
 
     benchmark_data
