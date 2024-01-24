@@ -13,17 +13,8 @@ fn main() {
     .unwrap();
     let criterion: serde_json::Value = criterion.into_json().unwrap();
 
-    // Setup everything
-    let env = Environment {
-        hostname: None,
-        cpu: String::from("Bench"),
-        clock_speed: 0,
-        memory: 1024 * 1024 * 4, // 4GiB of ram
-        os_type: String::from("Linux"),
-        software: Vec::new(),
-        user_name: String::from("Bench"),
-        manual_run: false,
-    };
+    let env = include_bytes!("../env.json");
+    let env: Environment = serde_json::from_slice(env).unwrap();
 
     // Prepare to send the run to rebenchDB
     let client = Client::new("http://localhost:33333");
@@ -39,10 +30,12 @@ fn handle_criterion_result(env: Environment, criterion: serde_json::Value) -> Be
     let (benchmark_name, commit) = benchmark_name.rsplit_once('_').unwrap();
     let (benchmark_name, branch) = benchmark_name.rsplit_once('_').unwrap();
 
-    let (source, time) = Source::from_remote_repo_with_rev_fresh_clone(
+    std::fs::create_dir_all("/tmp/rebenchdb-meilisearch-repo").unwrap();
+    let (source, time) = Source::from_remote_repo_with_rev(
         "http://github.com/meilisearch/meilisearch",
         branch,
         commit,
+        "/tmp/rebenchdb-meilisearch-repo",
     )
     .unwrap();
     dbg!(&source);
@@ -94,7 +87,7 @@ fn handle_criterion_result(env: Environment, criterion: serde_json::Value) -> Be
 
         let mut run = Run::new(run_id);
 
-        let mut point = DataPoint::new(1, 10);
+        let mut point = DataPoint::new(1, 3);
 
         let median = &benchmark["criterion_estimates_v1"]["median"];
         let point_estimate = median["point_estimate"].as_f64().unwrap();
