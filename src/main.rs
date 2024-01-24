@@ -8,6 +8,11 @@ const CACHED_MEILI_REPO: &str = "/tmp/rebenchdb-meilisearch-repo";
 const CACHED_MILLI_REPO: &str = "/tmp/rebenchdb-milli-repo";
 
 fn main() {
+    let rebench_addr = std::env::args()
+        .nth(1)
+        .unwrap_or(String::from("http://localhost:33333"));
+    println!("Using {rebench_addr} to reach rebenchDB. You can specify another addr by providing an argument.");
+
     let benchmarks = include_str!("../benchmarks");
     std::fs::create_dir_all(CACHED_MEILI_REPO).unwrap();
     std::fs::create_dir_all(CACHED_MILLI_REPO).unwrap();
@@ -29,7 +34,7 @@ fn main() {
             let env: Environment = serde_json::from_slice(env).unwrap();
 
             // Prepare to send the run to rebenchDB
-            let client = Client::new("http://localhost:33333");
+            let client = Client::new(&rebench_addr);
 
             let benchmark_data = match handle_criterion_result(env.clone(), criterion) {
                 Ok(ret) => ret,
