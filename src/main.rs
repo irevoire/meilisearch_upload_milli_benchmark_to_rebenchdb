@@ -1,44 +1,86 @@
+use rayon::iter::{ParallelBridge, ParallelIterator};
 use rebenchdb_client::{
     Benchmark, BenchmarkData, Client, Criterion, DataPoint, Environment, Executor, Measure, Run,
     RunDetails, RunId, Source, Suite,
 };
 
+const CACHED_MEILI_REPO: &str = "/tmp/rebenchdb-meilisearch-repo";
+const CACHED_MILLI_REPO: &str = "/tmp/rebenchdb-milli-repo";
+
 fn main() {
-    let filename = std::env::args().nth(1).unwrap();
-    let criterion = ureq::get(&format!(
-        "https://milli-benchmarks.fra1.digitaloceanspaces.com/critcmp_results/{}",
-        filename
-    ))
-    .call()
-    .unwrap();
-    let criterion: serde_json::Value = criterion.into_json().unwrap();
+    let benchmarks = include_str!("../benchmarks");
+    std::fs::create_dir_all(CACHED_MEILI_REPO).unwrap();
+    std::fs::create_dir_all(CACHED_MILLI_REPO).unwrap();
 
-    let env = include_bytes!("../env.json");
-    let env: Environment = serde_json::from_slice(env).unwrap();
+    let op = || {
+        benchmarks.lines().par_bridge().for_each(|filename| {
+            if filename.is_empty() {
+                return;
+            }
+            let criterion = ureq::get(&format!(
+                "https://milli-benchmarks.fra1.digitaloceanspaces.com/critcmp_results/{}",
+                filename
+            ))
+            .call()
+            .unwrap();
+            let criterion: serde_json::Value = criterion.into_json().unwrap();
 
-    // Prepare to send the run to rebenchDB
-    let client = Client::new("http://localhost:33333");
+            let env = include_bytes!("../env.json");
+            let env: Environment = serde_json::from_slice(env).unwrap();
 
-    let benchmark_data = handle_criterion_result(env.clone(), criterion);
-    println!("{}", serde_json::to_string_pretty(&benchmark_data).unwrap());
-    client.upload_results(benchmark_data).unwrap();
+            // Prepare to send the run to rebenchDB
+            let client = Client::new("http://localhost:33333");
+
+            let benchmark_data = match handle_criterion_result(env.clone(), criterion) {
+                Ok(ret) => ret,
+                Err(e) => {
+                    eprintln!("{e} on {filename}");
+                    return;
+                }
+            };
+            println!("Sending {filename}");
+            client
+                .upload_results(benchmark_data)
+                .expect("Make sure your rebenchDB server is up");
+        })
+    };
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(100)
+        .build()
+        .unwrap();
+    pool.install(op);
 }
 
-fn handle_criterion_result(env: Environment, criterion: serde_json::Value) -> BenchmarkData {
+fn handle_criterion_result(
+    env: Environment,
+    criterion: serde_json::Value,
+) -> Result<BenchmarkData, git2::Error> {
     // This field looks like that: `search_songs_main_6bf9824f`
     let benchmark_name = criterion["name"].as_str().unwrap();
     let (benchmark_name, commit) = benchmark_name.rsplit_once('_').unwrap();
     let (benchmark_name, branch) = benchmark_name.rsplit_once('_').unwrap();
 
-    std::fs::create_dir_all("/tmp/rebenchdb-meilisearch-repo").unwrap();
-    let (source, time) = Source::from_remote_repo_with_rev(
+    let (source, time) = match Source::from_remote_repo_with_rev(
         "http://github.com/meilisearch/meilisearch",
         branch,
         commit,
-        "/tmp/rebenchdb-meilisearch-repo",
-    )
-    .unwrap();
-    dbg!(&source);
+        CACHED_MEILI_REPO,
+    ) {
+        Ok(ret) => ret,
+        Err(e) if e.code() == git2::ErrorCode::NotFound => {
+            eprintln!("Didn't find {commit} in meilisearch, looking in milli");
+            Source::from_remote_repo_with_rev(
+                "http://github.com/meilisearch/milli",
+                branch,
+                commit,
+                CACHED_MILLI_REPO,
+            )?
+        }
+        Err(e) => {
+            return Err(e);
+        }
+    };
 
     let mut benchmark_data = BenchmarkData::new(env, source, benchmark_name, time);
     benchmark_data.with_project("Milli's benchmark");
@@ -111,5 +153,5 @@ fn handle_criterion_result(env: Environment, criterion: serde_json::Value) -> Be
         benchmark_data.push_run(run);
     }
 
-    benchmark_data
+    Ok(benchmark_data)
 }
